@@ -1,6 +1,6 @@
 # 🛰️ Network Traffic Analyzer & Optimization System
 
-A Streamlit-based real-time application for capturing, analyzing, classifying, and optimizing network traffic using machine learning models. The system leverages **Scapy**, **KMeans**, **Decision Trees**, and **XGBoost** to build a lightweight yet powerful pipeline for monitoring bandwidth, jitter, and traffic types.
+A Streamlit-based real-time application for capturing, analyzing, classifying, and optimizing network traffic using machine learning models. The system leverages **Scapy**, **KMeans**, **Decision Trees**, and **XGBoost** to build a lightweight pipeline for monitoring bandwidth, jitter, and traffic types.
 
 ---
 
@@ -27,7 +27,6 @@ The Streamlit interface provides:
 - Live metrics for every batch
 - Automatic optimization actions
 - Historical analytics (bandwidth trends, jitter trends, traffic distribution)
-- A logging system for network administrators
 
 ---
 
@@ -49,17 +48,16 @@ Each capture window is converted into a single feature vector:
 | `jitter` | Std deviation of gaps |
 | `byte_ratio_uplink_downlink` | Ratio of LAN uplink to downlink bytes |
 
-These features are fast to compute and effective for modeling traffic behavior.
+These features are used for modeling traffic behavior.
 
 ---
 
 ## 🔍 Literature‑Inspired Approach
-This system follows a lightweight variant of common network ML pipelines:
+
 - Clustering to infer traffic types from unlabeled data
 - Tree‑based models for interpretability
 - Regression for continuous QoS indicators
 
-These choices balance performance and real-time responsiveness.
 
 ---
 
@@ -95,11 +93,11 @@ These choices balance performance and real-time responsiveness.
   - Traffic distribution (pie)
   - Bandwidth per traffic type (bar)
 
--Lightweight statistical features can classify traffic effectively.
--KMeans + rule-based labeling is a strong alternative when labeled data is absent.
--Decision Trees offer clarity for network operators.
--Jitter and Bandwidth prediction is useful for  stability monitoring.
--Real-time windowing gives actionable short-term QoS signals
+- Lightweight statistical features can classify traffic effectively.
+- KMeans + rule-based labeling is a strong alternative when labeled data is absent.
+- Decision Trees offer clarity for network operators.
+- Jitter and Bandwidth prediction is useful for  stability monitoring.
+- Real-time windowing gives actionable short-term QoS signals
 
 ---
 
@@ -108,7 +106,6 @@ These choices balance performance and real-time responsiveness.
 - Dynamic Streamlit UI
 - Auto-updating charts
 - Automatic ML model training and loading
-- Optimization log for auditing
 - Two operational phases:
   - **Phase 1:** Learning
   - **Phase 2:** Monitoring
