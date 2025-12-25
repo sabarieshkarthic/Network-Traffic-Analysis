@@ -101,7 +101,7 @@ These features are used for modeling traffic behavior.
 
 ---
 
-## 🚀 App Features
+## 🚀  Features
 - Live capture using Scapy
 - Dynamic Streamlit UI
 - Auto-updating charts
