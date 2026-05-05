@@ -8,15 +8,29 @@ import joblib
 from scapy.all import sniff, IP, TCP, UDP
 from sklearn.cluster import KMeans
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import silhouette_score, accuracy_score, mean_squared_error
 from xgboost import XGBRegressor
 
 st.set_page_config(page_title="Network Traffic Analyzer", layout="wide")
+
+
+def calculate_true_bandwidth(packets, window_duration=10):
+    total_bytes = sum(len(pkt) for pkt in packets)
+    return (total_bytes * 8) / (1e6 * window_duration) 
+
+def calculate_true_jitter(packets):
+    times = [pkt.time for pkt in packets]
+    if len(times) < 2:
+        return 0
+    gaps = np.diff(times)
+    return np.std(gaps) * 1000 
+
 
 def extract_features(packets):
     sizes = [len(pkt) for pkt in packets]
     times = [pkt.time for pkt in packets]
 
-    burst_rate = len(packets) / 10.0  # packets/sec (10s window)
+    burst_rate = len(packets) / 10.0
     avg_packet_size = np.mean(sizes) if sizes else 0
 
     tcp_count = sum(1 for pkt in packets if TCP in pkt)
@@ -71,6 +85,8 @@ def assign_traffic_type(row, centers_df):
 
 def run_phase1(training_data=None, duration=120):
     features = []
+    true_bandwidths = []  
+    true_jitters = []     
     start_time = time.time()
     batch_count = 0
 
@@ -84,13 +100,17 @@ def run_phase1(training_data=None, duration=120):
         packets = sniff(timeout=10)
         feats = extract_features(packets)
         features.append(feats)
+        true_bandwidths.append(calculate_true_bandwidth(packets))
+        true_jitters.append(calculate_true_jitter(packets))
         time.sleep(0.1)
 
     df = pd.DataFrame(features, columns=columns)
 
     if training_data is not None and not training_data.empty:
         df = pd.concat([df, training_data[columns]], ignore_index=True)
-
+        pad = len(df) - len(true_bandwidths)
+        true_bandwidths = [0.0] * pad + true_bandwidths
+        true_jitters = [0.0] * pad + true_jitters
     kmeans = KMeans(n_clusters=5, random_state=42).fit(df)
     df["kmeans_cluster"] = kmeans.labels_
 
@@ -111,11 +131,30 @@ def run_phase1(training_data=None, duration=120):
     bw_model.fit(X_reg, df["bandwidth_mbps"])
     jit_model.fit(X_reg, df["jitter_ms"])
 
+    sil_score = silhouette_score(X, kmeans.labels_) if len(set(kmeans.labels_)) > 1 else 0.0
+
+    y_pred_train = clf.predict(X)
+    pseudo_acc = accuracy_score(y, y_pred_train)
+
+    true_bw_arr = np.array(true_bandwidths[:len(X)])
+    true_jit_arr = np.array(true_jitters[:len(X)])
+    pred_bw = bw_model.predict(X_reg)
+    pred_jit = jit_model.predict(X_reg)
+    bw_rmse = np.sqrt(mean_squared_error(true_bw_arr, pred_bw))
+    jit_rmse = np.sqrt(mean_squared_error(true_jit_arr, pred_jit))
+
+    st.session_state.eval_metrics = {
+        "silhouette_score": round(float(sil_score), 4),
+        "pseudo_label_accuracy": round(float(pseudo_acc) * 100, 2),
+        "bandwidth_rmse": round(float(bw_rmse), 4),
+        "jitter_rmse": round(float(jit_rmse), 4),
+    }
+
     joblib.dump(clf, "traffic_classifier.pkl")
     joblib.dump(bw_model, "bandwidth_predictor.pkl")
     joblib.dump(jit_model, "jitter_predictor.pkl")
 
-    st.session_state.status = "✅ Phase 1 complete. Models updated."
+    st.session_state.status = " Phase 1 complete. Models updated."
     update_status()
     return df
 
@@ -270,6 +309,44 @@ def update_dashboard(history, log, traffic_type, bandwidth, jitter_ms, action, a
             else:
                 st.info("No metrics available.")
 
+    if 'eval_metrics' in st.session_state and st.session_state.eval_metrics:
+        with st.session_state.eval_metrics_placeholder.container():
+            st.subheader("📊 Model Evaluation Metrics")
+            m = st.session_state.eval_metrics
+            ec1, ec2, ec3, ec4 = st.columns(4)
+            with ec1:
+                st.metric(
+                    "Silhouette Score",
+                    f"{m['silhouette_score']:.4f}",
+                    help="KMeans cluster quality. Range: -1 to 1. Higher is better (>0.5 is good)."
+                )
+            with ec2:
+                st.metric(
+                    "Pseudo-label Accuracy",
+                    f"{m['pseudo_label_accuracy']:.1f}%",
+                    help="How consistently the Decision Tree reproduces the KMeans-derived labels on training data. Not true accuracy — no ground truth labels exist."
+                )
+            with ec3:
+                st.metric(
+                    "Bandwidth RMSE",
+                    f"{m['bandwidth_rmse']:.4f} Mbps",
+                    help="Root Mean Squared Error between XGBoost predicted bandwidth and true packet-level bandwidth. Lower is better."
+                )
+            with ec4:
+                st.metric(
+                    "Jitter RMSE",
+                    f"{m['jitter_rmse']:.4f} ms",
+                    help="Root Mean Squared Error between XGBoost predicted jitter and true packet-level jitter. Lower is better."
+                )
+            with st.expander("ℹ️ About these metrics"):
+                st.markdown("""
+| Metric | What it measures | Ground truth source |
+|---|---|---|
+| **Silhouette Score** | KMeans cluster separation quality | Unsupervised — no labels needed |
+| **Pseudo-label Accuracy** | DT consistency with KMeans labels | KMeans labels (not real labels) |
+| **Bandwidth RMSE** | XGBoost bandwidth prediction error | True bytes/sec from raw packets |
+| **Jitter RMSE** | XGBoost jitter prediction error | True inter-packet gap std from raw packets |
+                """)
     if len(history) > 0:
         hist_df = pd.DataFrame(history)
         with st.session_state.charts_placeholder.container():
@@ -361,10 +438,14 @@ if 'log' not in st.session_state:
     st.session_state.log = []
 if 'global_batch_count' not in st.session_state:
     st.session_state.global_batch_count = 0
+if 'eval_metrics' not in st.session_state:          
+    st.session_state.eval_metrics = {}           
 if 'status_placeholder' not in st.session_state:
     st.session_state.status_placeholder = st.empty()
 if 'metrics_placeholder' not in st.session_state:
     st.session_state.metrics_placeholder = st.empty()
+if 'eval_metrics_placeholder' not in st.session_state:   
+    st.session_state.eval_metrics_placeholder = st.empty() 
 if 'charts_placeholder' not in st.session_state:
     st.session_state.charts_placeholder = st.empty()
 if 'log_placeholder' not in st.session_state:
@@ -402,4 +483,4 @@ else:
     with st.session_state.charts_placeholder.container():
         st.warning("Charts will appear here when process is running.")
     with st.session_state.log_placeholder.container():
-        st.warning("Log will appear here when process is running.") 
+        st.warning("Log will appear here when process is running.")
